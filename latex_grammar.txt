@@ -1,0 +1,11 @@
+File: statements*=LaTeXStatement;
+LaTeXStatement: Command | Literal | ParameterUse | Punctuation | Block;
+Literal: Word;
+Word: word=/[^\d\W]\w*\b/;
+Command: command=/\\\w*\b/ optional_parameters*=OptionalParameter;
+OptionalParameter: '[' statements+=LaTeXStatement ']';
+Block: '{' statements=LaTeXStatement* '}';
+Comment: /%.*$/;
+ParameterUse: '#' parameter_number = INT;
+Punctuation: punctuation=PunctuationSymbol;
+PunctuationSymbol: '.' | ',' | '!' | '?' | '--' | '---' | ';' | '(' | ')' | '\{' | '\}';
