@@ -222,7 +222,7 @@ class BeginCommand(InterpreterCommand):
         environment = interpreter.environment_definitions[name]
         parameters = interpreter.read_parameters(environment.params)
         if environment.params > 0:
-            interpreter.param_stack.push(parameters)
+            interpreter.param_stack.append(parameters)
             interpreter.push_block(environment.preamble, parameters)
         else:
             interpreter.push_block(environment.preamble, interpreter.param_stack[-1])
@@ -367,6 +367,10 @@ class Interpreter:
         self.new_environment('subsubsubsection*', 1, [], [])
         self.new_environment('paragraph', 1, [], [])
         self.new_environment('paragraph*', 1, [], [])
+        self.new_environment('table', 0, [], [])
+        self.new_environment('tabular', 0, [], [])
+        self.new_environment('tabu', 1, [], [])
+                
         self.new_command('documentclass', 1)
         self.new_command('textbf', 1, Block(statements=[ParameterUse(parameter_number=1)]))
         self.new_command('emph', 1, Block(statements=[ParameterUse(parameter_number=1)]))
@@ -378,11 +382,17 @@ class Interpreter:
         self.new_command('sum', 0)
         self.new_command('marginpar', 1)
         self.new_command('small', 0)
+        self.new_command('scriptsize', 0)
+        self.new_command('centering', 0)
         
         self.new_command('texttt', 1)
         self.new_command('LaTeX', 0)
         self.new_command('TeX', 0)
         self.new_command('frac', 2)
+        self.new_command('rotatebox', 2)
+        self.new_command('toprule', 0)
+        self.new_command('midrule', 0)
+        self.new_command('bottomrule', 0)
         
         ######################################################################
         # These belong elsewhere..
@@ -402,6 +412,8 @@ class Interpreter:
         self.new_command('subsubsubsection*', 1)
         self.new_command('paragraph', 1)
         self.new_command('paragraph*', 1)
+        self.new_command('caption', 1)
+        self.new_command('label', 1)
 
         self.new_command('PassOptionsToPackage', 2)
         self.command_definitions['renewcommand*'] = RenewCommandStar()
