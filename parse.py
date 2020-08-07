@@ -16,6 +16,11 @@ class InterpreterRuntimeError(Exception):
 class ModelClass:
     pass
 
+    def as_string(self):
+        lst = []
+        self.collect_strings(lst)
+        return "".join(lst)
+
 
 class Block(ModelClass):
 
@@ -26,8 +31,28 @@ class Block(ModelClass):
     def interpret(self, interpreter):
         parameters = interpreter.param_stack[-1]
         interpreter.push_block(self.statements, parameters)
-        interpreter.handle('block', self.statements)
+        interpreter._process('block', self.statements)
 
+    # This will probably break when whitespace gets involved. shrug
+    def collect_strings(self, lst):
+        for statement in self.statements:
+            statement.collect_strings(lst)
+        
+class Number(ModelClass):
+
+    def __init__(self, parent=None, number=[]):
+        self.parent = parent
+        self.number = number
+
+    def interpret(self, interpreter):
+        interpreter._process('number', self.number)
+
+    def __repr__(self):
+        return "<Number '%s' at 0x%x>" % (self.word, id(self))
+
+    def collect_strings(self, lst):
+        lst.append(self.number)
+    
         
 class Word(ModelClass):
 
@@ -36,11 +61,14 @@ class Word(ModelClass):
         self.word = word
 
     def interpret(self, interpreter):
-        interpreter.handle('word', self.word)
+        interpreter._process('word', self.word)
 
     def __repr__(self):
         return "<Word '%s' at 0x%x>" % (self.word, id(self))
-        
+
+    def collect_strings(self, lst):
+        lst.append(self.word)
+    
 class ParameterUse(ModelClass):
 
     def __init__(self, parent=None, parameter_number=None):
@@ -51,11 +79,15 @@ class ParameterUse(ModelClass):
         parameters = interpreter.param_stack[-1]
         parameter_block = parameters[self.parameter_number-1]
         interpreter.push_block(parameter_block.statements, parameters)
-        interpreter.handle('parameter_use', self.parameter_number)
+        interpreter._process('parameter_use', self.parameter_number)
 
     def __repr__(self):
         return "<ParameterUse '%s' at 0x%x>" % (self.parameter_number, id(self))
-        
+
+    def collect_strings(self, lst):
+        lst.append('#%s' % self.parameter_number)
+
+    
 class Punctuation(ModelClass):
 
     def __init__(self, parent=None, punctuation=None):
@@ -63,10 +95,13 @@ class Punctuation(ModelClass):
         self.punctuation = punctuation
 
     def interpret(self, interpreter):
-        interpreter.handle('punctuation', self.punctuation)
+        interpreter._process('punctuation', self.punctuation)
 
     def __repr__(self):
         return "<Punctuation '%s' at 0x%x>" % (self.punctuation, id(self))
+
+    def collect_strings(self, lst):
+        lst.append(self.punctuation)
 
 class Command(ModelClass):
 
@@ -83,9 +118,12 @@ class Command(ModelClass):
     def __repr__(self):
         return "<Command '%s' at 0x%x>" % (self.command, id(self))
 
+    def collect_strings(self, lst):
+        lst.append(self.command)
+    
 # we use a NOP as a sentinel in the cursor code to simplify it
 
-class NOP(ModelClass):
+class NOPModel(ModelClass):
 
     def __init__(self):
         pass
@@ -93,6 +131,8 @@ class NOP(ModelClass):
     def interpret(self, interpreter):
         pass
             
+    def collect_strings(self, lst):
+        pass
         
 ##############################################################################
 # interpreter classes
@@ -105,8 +145,14 @@ class Environment:
         self.preamble = preamble
         self.postamble = postamble
 
+
+class InterpreterCommand:
+
+    def __init__(self):
+        self.params = 0
+
         
-class LaTeXCommand:
+class LaTeXCommand(InterpreterCommand):
     
     def __init__(self, name, params, block):
         self.name = name
@@ -114,14 +160,13 @@ class LaTeXCommand:
         self.block = block
 
     def invoke(self, interpreter, optional_params, parameters):
-        # FIXME how do we handle optional params??
         if len(parameters) != self.params:
             raise InterpreterRuntimeError("Expected %d parameters, got %d instead" % (self.params, len(parameters)))
         interpreter.push_block(self.block.statements, parameters)
-        interpreter.handle('command', self.name, parameters)
+        interpreter._process('command', self.name, parameters, optional_params)
 
         
-class BeginCommand:
+class BeginCommand(InterpreterCommand):
 
     def __init__(self):
         self.params = 1
@@ -143,11 +188,10 @@ class BeginCommand:
             interpreter.push_block(environment.preamble, parameters)
         else:
             interpreter.push_block(environment.preamble, interpreter.param_stack[-1])
-        interpreter.print_state()
-        interpreter.handle('command', 'begin', parameters)
+        interpreter._process('begin_environment', name, parameters)
 
             
-class EndCommand:
+class EndCommand(InterpreterCommand):
 
     def __init__(self):
         self.params = 1
@@ -169,12 +213,48 @@ class EndCommand:
             interpreter.push_block(environment.postamble, parameters)
         else:
             interpreter.push_block(environment.postamble, interpreter.param_stack[-1])
-            
+        interpreter._process('end_environment', name, parameters)
+
+class NOP(InterpreterCommand):
+
+    def invoke(self, *args):
+        pass
+
+class StartIgnoring(InterpreterCommand):
+
+    def invoke(self, interpreter, *args):
+        interpreter.halt_processing()
+
+
+class StopIgnoring(InterpreterCommand):
+
+    def invoke(self, interpreter, *args):
+        interpreter.resume_processing()
+
+
+class RenewCommandStar(InterpreterCommand):
+
+    def invoke(self, interpreter, optional_parameters, parameters):
+        command_name = interpreter.read()
+        command_block = interpreter.read()
+        params = 0
+        if len(optional_parameters):
+            v = optional_parameters[0].as_string
+            try:
+                n = int(v)
+            except ValueError:
+                raise InterpreterRuntimeError("expected optional parameter %s to be a number" % v)
+            params = n
+        interpreter.new_command(
+            command_name.as_string(), params,
+            command_block)
+
 
 class Interpreter:
     
     def __init__(self, model):
-        self.statement_stream = [model.statements + [NOP()]]
+        self.statement_stream = [model.statements + [NOPModel()]]
+        self.processing = True
         self.cursor = [0]
         self.consumed = [0]
         self.param_stack = [[]]
@@ -187,6 +267,12 @@ class Interpreter:
 
     ##########################################################################
     # cursor management
+
+    def read(self):
+        result = self.peek()
+        self.consume()
+        self.advance()
+        return result
     
     def peek(self):
         ix = len(self.cursor) - 1
@@ -199,7 +285,6 @@ class Interpreter:
         return None
 
     def consume(self):
-        print("Consumed token")
         self.consumed[-1] += 1
     
     def advance(self):
@@ -211,14 +296,13 @@ class Interpreter:
             self.param_stack.pop()
             if len(self.cursor):
                 self.cursor[-1] = self.consumed[-1]
-        self.print_state()
 
     def stream_ended(self):
         return self.cursor == []
 
     def push_block(self, block, parameters = []):
         assert isinstance(parameters, list)
-        self.statement_stream.append(block + [NOP()])
+        self.statement_stream.append(block + [NOPModel()])
         self.cursor.append(0)
         self.consumed.append(0)
         self.param_stack.append(parameters)
@@ -243,8 +327,19 @@ class Interpreter:
         self.new_command('documentclass', 1)
         self.new_command('textbf', 1, Block(statements=[ParameterUse(parameter_number=1)]))
         self.new_command('emph', 1, Block(statements=[ParameterUse(parameter_number=1)]))
+        self.new_command('relax', 0)
+        self.new_command('usepackage', 1)
+        self.new_command('PassOptionsToPackage', 2)
+        self.command_definitions['renewcommand*'] = RenewCommandStar()
         self.command_definitions['begin'] = BeginCommand()
         self.command_definitions['end'] = EndCommand()
+        
+        self.command_definitions['ifpdf'] = StartIgnoring()
+        self.command_definitions['else'] = NOP()
+        self.command_definitions['fi'] = StopIgnoring()
+        for cmd in ['pdfoutput', 'pdfcompresslevel', 'pdfoptionpdfminorversion',
+                    'ExecuteOptions', 'DeclareGraphicsExtensions']:
+            self.command_definitions[cmd] = NOP()
 
     def new_environment(self, name, params, preamble, postamble):
         self.environment_definitions[name] = Environment(
@@ -259,6 +354,16 @@ class Interpreter:
         print("  params lengths:           %s" % list(len(s) for s in self.param_stack))
         print("  cursor:                   %s" % self.cursor)
         print("  consumed:                 %s" % self.consumed)
+
+    def _process(self, kind, *args):
+        if self.processing:
+            self.process(kind, *args)
+
+    def resume_processing(self):
+        self.processing = True
+
+    def halt_processing(self):
+        self.processing = False
                     
     ##########################################################################
     # context-specific parsing bits
@@ -268,14 +373,12 @@ class Interpreter:
         # we first need to advance the cursor
         if n_max == 0:
             return []
-        print("read_parameters start: will advance")
         self.advance()
         result = []
         cmd = self.peek()
         while n_max > 0 and isinstance(cmd, Block):
             result.append(cmd)
             self.consume()
-            print("read_parameters not done yet: will advance")
             self.advance()
             cmd = self.peek()
             n_max -= 1
@@ -286,14 +389,14 @@ class Interpreter:
     #     params = self.read_parameters(environment.params)
     #     self.environment_stack.append(name)
     #     self.param_stack.append(params)
-    #     self.handle('begin_environment', name, params)
+    #     self.process('begin_environment', name, params)
 
     # def end_environment(self, name):
     #     if name != self.environment_stack[-1][0]:
     #         msg = 'expected environment to end with %s, got %s instead' % (
     #             self.environment_stack[-1][0], name)
     #         raise InterpreterRuntimeError(msg)
-    #     self.handle('end_environment', name)
+    #     self.process('end_environment', name)
     #     self.param_stack.pop()
     #     self.environment_stack.pop()
 
@@ -302,55 +405,73 @@ class Interpreter:
 
     def step(self):
         """Advances one full statement from the stream"""
-        print("Step.")
-        self.print_state()
         statement = self.peek()
-        assert isinstance(statement, ModelClass)
+        try:
+            assert isinstance(statement, ModelClass)
+        except AssertionError:
+            print("Unimplemented model class!", statement)
+            raise
         self.consume()
-        print("  Will interpret %s" % statement)
         statement.interpret(self)
-        print("step finished: will advance") 
-        self.print_state()
         self.advance()
-        print("step finished: have advanced") 
-        self.print_state()
-
 
     def run(self):
         while not self.stream_ended():
             self.step()
 
     ##########################################################################
-    # abstract statement emissions; override these to add specific behavior
+    # abstract statement processing; override this to add specific behavior
 
-    def handle(self, kind, *args):
-        print("Handle", kind, *args)
+    def process(self, kind, *args):
+        pass
+        # print("process", kind, *args)
         
-
-    # def handle_begin_environment(self, name, params):
+    # def process_begin_environment(self, name, params):
     #     pass
 
-    # def handle_end_environment(self, name):
+    # def process_end_environment(self, name):
     #     pass
 
-    # def handle_command(self, name, params):
+    # def process_command(self, name, params):
     #     pass
 
-    # def handle_word(self, word):
+    # def process_word(self, word):
     #     pass
 
-    # def handle_number(self, word):
+    # def process_number(self, word):
     #     pass
 
-    # def handle_punctuation(self, punctuation):
+    # def process_punctuation(self, punctuation):
     #     pass
+
+##############################################################################
+# graphics
+
+graphics_state = {}
+
+class GraphicsPath:
+
+    def __init__(self):
+        self.params = 1
+
+    def invoke(self, interpreter, optionals, parameters):
+        graphics_state["graphics_path"] = list(
+            stmt.as_string() for stmt in parameters[0].statements)
+        
+def install_graphics_support(interpreter):
+    interpreter.command_definitions['graphicspath'] = GraphicsPath()
+
 
 ##############################################################################
 
 grammar = metamodel_from_file(
     "latex_grammar.txt",
-    classes=[Command, Word, ParameterUse, Punctuation, Block])
-model = grammar.model_from_file('./test-files/0000.tex')
+    classes=[Command, Word, Number, ParameterUse, Punctuation, Block])
+
+import sys
+
+model = grammar.model_from_file(sys.argv[1])
 interpreter = Interpreter(model)
-print(model.statements)
+install_graphics_support(interpreter)
+
 interpreter.run()
