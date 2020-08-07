@@ -14,13 +14,36 @@ class InterpreterRuntimeError(Exception):
 # textx model classes
 
 class ModelClass:
-    pass
 
     def as_string(self):
         lst = []
         self.collect_strings(lst)
         return "".join(lst)
 
+class LineBreak(ModelClass):
+
+    def __init__(self, parent=None, lb=None):
+        self.parent = parent
+        self.lb = lb
+
+    def as_string(self):
+        return "\n"
+
+    def interpret(self, interpreter):
+        interpreter._process('linebreak')
+
+    
+class Whitespace(ModelClass):
+
+    def __init__(self, parent=None, ws=None):
+        self.parent = parent
+        self.ws = ws
+
+    def as_string(self):
+        return " "
+   
+    def interpret(self, interpreter):
+        interpreter._process('whitespace')
 
 class Block(ModelClass):
 
@@ -445,6 +468,21 @@ class Interpreter:
     #     pass
 
 ##############################################################################
+# package definition support
+
+def command_store_in_state(command_name, var, command_key=None):
+    if command_key is None:
+        command_key = command_name
+
+    class Command(InterpreterCommand):
+        def __init__(self):
+            self.params = 1
+        def invoke(self, interpreter, optionals, parameters):
+            var[command_key] = parameters[0]
+    
+    return Command()
+    
+##############################################################################
 # graphics
 
 graphics_state = {}
@@ -461,17 +499,40 @@ class GraphicsPath:
 def install_graphics_support(interpreter):
     interpreter.command_definitions['graphicspath'] = GraphicsPath()
 
+##############################################################################
+# VGTC stuff
 
+vgtc_state = {}
+
+def install_vgtc_support(interpreter):
+    defs = interpreter.command_definitions
+    for cmd in ['onlineid', 'vgtccategory', 'vgtcpapertype',
+                'CCScatlist', 'teaser']:
+        defs[cmd] = command_store_in_state(cmd, vgtc_state)
+
+##############################################################################
+# article stuff
+
+article_state = {}
+
+def install_article_support(interpreter):
+    defs = interpreter.command_definitions
+    for cmd in ['keywords', 'abstract', 'title', 'author',
+                'authorfooter', 'shortauthortitle']:
+        defs[cmd] = command_store_in_state(cmd, article_state)
+    
 ##############################################################################
 
 grammar = metamodel_from_file(
     "latex_grammar.txt",
-    classes=[Command, Word, Number, ParameterUse, Punctuation, Block])
+    classes=[Command, Word, Number, ParameterUse, Punctuation, Block, Whitespace, LineBreak], skipws=False)
 
 import sys
 
 model = grammar.model_from_file(sys.argv[1])
 interpreter = Interpreter(model)
+install_article_support(interpreter)
 install_graphics_support(interpreter)
+install_vgtc_support(interpreter)
 
 interpreter.run()
