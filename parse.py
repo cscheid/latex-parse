@@ -509,6 +509,7 @@ def install_vgtc_support(interpreter):
     for cmd in ['onlineid', 'vgtccategory', 'vgtcpapertype',
                 'CCScatlist', 'teaser']:
         defs[cmd] = command_store_in_state(cmd, vgtc_state)
+    defs['vgtcinsertpkg'] = NOP()
 
 ##############################################################################
 # article stuff
@@ -525,7 +526,10 @@ def install_article_support(interpreter):
 
 grammar = metamodel_from_file(
     "latex_grammar.txt",
-    classes=[Command, Word, Number, ParameterUse, Punctuation, Block, Whitespace, LineBreak], skipws=False)
+    classes=[Command, Word, Number, ParameterUse, Punctuation,
+             Block, Whitespace, LineBreak],
+    skipws=False,
+    memoization=True)
 
 import sys
 
