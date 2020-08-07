@@ -20,6 +20,22 @@ class ModelClass:
         self.collect_strings(lst)
         return "".join(lst)
 
+class LaTeXComment(ModelClass):
+
+    def __init__(self, parent=None, comment=None):
+        self.parent = parent
+        self.comment = comment
+
+    def as_string(self):
+        return ""
+
+    def collect_strings(self, lst):
+        pass
+
+    def interpret(self, interpreter):
+        interpreter._process('comment', self.comment)
+    
+    
 class MathToggle(ModelClass):
 
     def __init__(self, parent=None, mt=None):
@@ -35,6 +51,7 @@ class MathToggle(ModelClass):
 
     def interpret(self, interpreter):
         interpreter._process('mathtoggle')
+
 
 class LineBreak(ModelClass):
 
@@ -66,6 +83,7 @@ class Whitespace(ModelClass):
 
     def interpret(self, interpreter):
         interpreter._process('whitespace')
+
 
 class Block(ModelClass):
 
@@ -162,7 +180,6 @@ class Command(ModelClass):
         self.optional_parameters = self.optional_parameters + optional_parameters
         parameters = interpreter.read_parameters(command_defn.params)
         
-        print(self, self.optional_parameters)
         command_defn.invoke(interpreter, self.optional_parameters, parameters)
 
     def __repr__(self):
@@ -184,7 +201,20 @@ class NOPModel(ModelClass):
             
     def collect_strings(self, lst):
         pass
-        
+
+
+class Echo(ModelClass):
+
+    def __init__(self, value):
+        self.value = value
+
+    def collect_strings(self, lst):
+        lst.append(self.value)
+
+    def interpret(self, interpreter, *args):
+        EchoCommand(self.value).invoke(interpreter, [], [])
+
+
 ##############################################################################
 # interpreter classes
 
@@ -202,6 +232,14 @@ class InterpreterCommand:
     def __init__(self):
         self.params = 0
 
+class EchoCommand(InterpreterCommand):
+
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+    
+    def invoke(self, interpreter, *args):
+        interpreter._process('echo', self.value)
         
 class LaTeXCommand(InterpreterCommand):
     
@@ -251,7 +289,8 @@ class BeginCommand(InterpreterCommand):
                 tok = interpreter.peek()
             interpreter.read()
             optional_params = Block(statements=optional_params_list)
-        
+
+        interpreter.environment_stack.append(name)
         if environment.params > 0:
             interpreter.param_stack.append(parameters)
             interpreter.push_block(environment.preamble, parameters)
@@ -283,6 +322,7 @@ class EndCommand(InterpreterCommand):
         else:
             interpreter.push_block(environment.postamble, interpreter.param_stack[-1])
         interpreter._process('end_environment', name, parameters)
+        interpreter.environment_stack.pop()
 
 class NOP(InterpreterCommand):
 
@@ -317,6 +357,9 @@ class RenewCommandStar(InterpreterCommand):
         interpreter.new_command(
             command_name.as_string(), params,
             command_block)
+
+def echo(value):
+    return Echo(value)
 
 
 class Interpreter:
@@ -404,8 +447,8 @@ class Interpreter:
         self.new_environment('figure', 0, [], [])
                 
         self.new_command('documentclass', 1)
-        self.new_command('textbf', 1, Block(statements=[ParameterUse(parameter_number=1)]))
-        self.new_command('emph', 1, Block(statements=[ParameterUse(parameter_number=1)]))
+        self.new_command('textbf', 1)
+        self.new_command('emph', 1)
         self.new_command('relax', 0)
         self.new_command('item', 0)
         self.new_command('textbackslash', 0)
@@ -561,26 +604,7 @@ class Interpreter:
     # abstract statement processing; override this to add specific behavior
 
     def process(self, kind, *args):
-        # pass
         print("process", kind, *args)
-        
-    # def process_begin_environment(self, name, params):
-    #     pass
-
-    # def process_end_environment(self, name):
-    #     pass
-
-    # def process_command(self, name, params):
-    #     pass
-
-    # def process_word(self, word):
-    #     pass
-
-    # def process_number(self, word):
-    #     pass
-
-    # def process_punctuation(self, punctuation):
-    #     pass
 
 ##############################################################################
 # package definition support
@@ -596,66 +620,12 @@ def command_store_in_state(command_name, var, command_key=None):
             var[command_key] = parameters[0]
     
     return Command()
-    
-##############################################################################
-# graphics
-
-graphics_state = {}
-
-class GraphicsPath:
-
-    def __init__(self):
-        self.params = 1
-
-    def invoke(self, interpreter, optionals, parameters):
-        graphics_state["graphics_path"] = list(
-            stmt.as_string() for stmt in parameters[0].statements)
-        
-
-def install_graphics_support(interpreter):
-    interpreter.command_definitions['graphicspath'] = GraphicsPath()
-    interpreter.new_command('includegraphics', 1)
-
-##############################################################################
-# VGTC stuff
-
-vgtc_state = {}
-
-def install_vgtc_support(interpreter):
-    defs = interpreter.command_definitions
-    for cmd in ['onlineid', 'vgtccategory', 'vgtcpapertype',
-                'CCScatlist', 'teaser']:
-        defs[cmd] = command_store_in_state(cmd, vgtc_state)
-    defs['vgtcinsertpkg'] = NOP()
-    interpreter.new_command('firstsection', 1)
-
-##############################################################################
-# article stuff
-
-article_state = {}
-
-def install_article_support(interpreter):
-    defs = interpreter.command_definitions
-    for cmd in ['keywords', 'abstract', 'title', 'author',
-                'authorfooter', 'shortauthortitle']:
-        defs[cmd] = command_store_in_state(cmd, article_state)
-    interpreter.new_command('maketitle', 0)
 
 ##############################################################################
 
 grammar = metamodel_from_file(
     "latex_grammar.txt",
-    classes=[Command, Word, Number, ParameterUse, Punctuation,
+    classes=[Command, Word, Number, ParameterUse, Punctuation, LaTeXComment,
              Block, Whitespace, LineBreak, MathToggle],
     skipws=False,
     memoization=True)
-
-import sys
-
-model = grammar.model_from_file(sys.argv[1])
-interpreter = Interpreter(model)
-install_article_support(interpreter)
-install_graphics_support(interpreter)
-install_vgtc_support(interpreter)
-
-interpreter.run()
