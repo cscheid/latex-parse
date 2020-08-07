@@ -20,6 +20,19 @@ class ModelClass:
         self.collect_strings(lst)
         return "".join(lst)
 
+class MathToggle(ModelClass):
+
+    def __init__(self, parent=None, mt=None):
+        self.parent = parent
+        assert(mt == '$')
+        self.mt = mt
+
+    def as_string(self):
+        return "$"
+
+    def interpret(self, interpreter):
+        interpreter._process('mathtoggle')
+
 class LineBreak(ModelClass):
 
     def __init__(self, parent=None, lb=None):
@@ -71,7 +84,7 @@ class Number(ModelClass):
         interpreter._process('number', self.number)
 
     def __repr__(self):
-        return "<Number '%s' at 0x%x>" % (self.word, id(self))
+        return "<Number '%s' at 0x%x>" % (self.number, id(self))
 
     def collect_strings(self, lst):
         lst.append(self.number)
@@ -184,7 +197,9 @@ class LaTeXCommand(InterpreterCommand):
 
     def invoke(self, interpreter, optional_params, parameters):
         if len(parameters) != self.params:
-            raise InterpreterRuntimeError("Expected %d parameters, got %d instead" % (self.params, len(parameters)))
+            raise InterpreterRuntimeError(
+                "Command %s: Expected %d parameters, got %d instead" % (
+                    self.name, self.params, len(parameters)))
         interpreter.push_block(self.block.statements, parameters)
         interpreter._process('command', self.name, parameters, optional_params)
 
@@ -325,6 +340,8 @@ class Interpreter:
 
     def push_block(self, block, parameters = []):
         assert isinstance(parameters, list)
+        if isinstance(block, Block):
+            block = block.statements
         self.statement_stream.append(block + [NOPModel()])
         self.cursor.append(0)
         self.consumed.append(0)
@@ -337,6 +354,9 @@ class Interpreter:
         # Ideally, these would be created by interpreting TeX
         # code. But right now we won't
         self.new_environment('document', 0, [], [])
+        self.new_environment('equation', 0, [], [])
+        self.new_environment('itemize', 0, [], [])
+        self.new_environment('enumerate', 0, [], [])
         self.new_environment('section', 1, [], [])
         self.new_environment('section*', 1, [], [])
         self.new_environment('subsection', 1, [], [])
@@ -351,7 +371,38 @@ class Interpreter:
         self.new_command('textbf', 1, Block(statements=[ParameterUse(parameter_number=1)]))
         self.new_command('emph', 1, Block(statements=[ParameterUse(parameter_number=1)]))
         self.new_command('relax', 0)
+        self.new_command('item', 0)
+        self.new_command('textbackslash', 0)
+        self.new_command('\\', 0)
+        self.new_command('dots', 0)
+        self.new_command('sum', 0)
+        self.new_command('marginpar', 1)
+        self.new_command('small', 0)
+        
+        self.new_command('texttt', 1)
+        self.new_command('LaTeX', 0)
+        self.new_command('TeX', 0)
+        self.new_command('frac', 2)
+        
+        ######################################################################
+        # These belong elsewhere..
+        
+        self.new_command('href', 1)
+        self.new_command('autoref', 1)
+        self.new_command('cite', 1)
+        
         self.new_command('usepackage', 1)
+        self.new_command('section', 1)
+        self.new_command('section*', 1)
+        self.new_command('subsection', 1)
+        self.new_command('subsection*', 1)
+        self.new_command('subsubsection', 1)
+        self.new_command('subsubsection*', 1)
+        self.new_command('subsubsubsection', 1)
+        self.new_command('subsubsubsection*', 1)
+        self.new_command('paragraph', 1)
+        self.new_command('paragraph*', 1)
+
         self.new_command('PassOptionsToPackage', 2)
         self.command_definitions['renewcommand*'] = RenewCommandStar()
         self.command_definitions['begin'] = BeginCommand()
@@ -446,8 +497,8 @@ class Interpreter:
     # abstract statement processing; override this to add specific behavior
 
     def process(self, kind, *args):
-        pass
-        # print("process", kind, *args)
+        # pass
+        print("process", kind, *args)
         
     # def process_begin_environment(self, name, params):
     #     pass
@@ -495,7 +546,8 @@ class GraphicsPath:
     def invoke(self, interpreter, optionals, parameters):
         graphics_state["graphics_path"] = list(
             stmt.as_string() for stmt in parameters[0].statements)
-        
+
+
 def install_graphics_support(interpreter):
     interpreter.command_definitions['graphicspath'] = GraphicsPath()
 
@@ -510,6 +562,7 @@ def install_vgtc_support(interpreter):
                 'CCScatlist', 'teaser']:
         defs[cmd] = command_store_in_state(cmd, vgtc_state)
     defs['vgtcinsertpkg'] = NOP()
+    interpreter.new_command('firstsection', 1)
 
 ##############################################################################
 # article stuff
@@ -521,13 +574,14 @@ def install_article_support(interpreter):
     for cmd in ['keywords', 'abstract', 'title', 'author',
                 'authorfooter', 'shortauthortitle']:
         defs[cmd] = command_store_in_state(cmd, article_state)
-    
+    interpreter.new_command('maketitle', 0)
+
 ##############################################################################
 
 grammar = metamodel_from_file(
     "latex_grammar.txt",
     classes=[Command, Word, Number, ParameterUse, Punctuation,
-             Block, Whitespace, LineBreak],
+             Block, Whitespace, LineBreak, MathToggle],
     skipws=False,
     memoization=True)
 
