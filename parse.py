@@ -203,6 +203,9 @@ class NOPModel(ModelClass):
         pass
 
 
+##############################################################################
+# Specialized interpreter support
+
 class Echo(ModelClass):
 
     def __init__(self, value):
@@ -214,6 +217,16 @@ class Echo(ModelClass):
     def interpret(self, interpreter, *args):
         EchoCommand(self.value).invoke(interpreter, [], [])
 
+class Callback(ModelClass):
+
+    def __init__(self, value):
+        self.value = value
+
+    def collect_strings(self, lst):
+        pass
+
+    def interpret(self, interpreter, *args):
+        CallbackCommand(self.value).invoke(interpreter, [], [])
 
 ##############################################################################
 # interpreter classes
@@ -232,6 +245,7 @@ class InterpreterCommand:
     def __init__(self):
         self.params = 0
 
+
 class EchoCommand(InterpreterCommand):
 
     def __init__(self, value):
@@ -240,7 +254,17 @@ class EchoCommand(InterpreterCommand):
     
     def invoke(self, interpreter, *args):
         interpreter._process('echo', self.value)
-        
+
+class CallbackCommand(InterpreterCommand):
+
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+    def invoke(self, interpreter, *args):
+        interpreter._process('callback', self.value)
+
+
 class LaTeXCommand(InterpreterCommand):
     
     def __init__(self, name, params, block):
@@ -290,7 +314,7 @@ class BeginCommand(InterpreterCommand):
             interpreter.read()
             optional_params = Block(statements=optional_params_list)
 
-        interpreter.environment_stack.append(name)
+        interpreter.push_environment(name)
         if environment.params > 0:
             interpreter.param_stack.append(parameters)
             interpreter.push_block(environment.preamble, parameters)
@@ -322,7 +346,7 @@ class EndCommand(InterpreterCommand):
         else:
             interpreter.push_block(environment.postamble, interpreter.param_stack[-1])
         interpreter._process('end_environment', name, parameters)
-        interpreter.environment_stack.pop()
+        interpreter.pop_environment()
 
 class NOP(InterpreterCommand):
 
@@ -361,6 +385,21 @@ class RenewCommandStar(InterpreterCommand):
 def echo(value):
     return Echo(value)
 
+def callback(value):
+    return Callback(value)
+
+class EnvironmentRecord:
+
+    def __init__(self, name):
+        self.name = name
+        self.pop_hooks = []
+
+    def add_pop_hook(self, hook):
+        self.pop_hooks.append(hook)
+
+    def call_pop_hooks(self):
+        for hook in self.pop_hooks:
+            hook()
 
 class Interpreter:
     
@@ -412,6 +451,12 @@ class Interpreter:
     def stream_ended(self):
         return self.cursor == []
 
+    def append_to_current_block(self, statement):
+        print("cursor:", self.cursor)
+        print("top block", self.statement_stream[-1])
+        print("2nd block", self.statement_stream[-2])
+        self.statement_stream[-1].append(statement)
+    
     def push_block(self, block, parameters = []):
         assert isinstance(parameters, list)
         if isinstance(block, Block):
@@ -421,6 +466,19 @@ class Interpreter:
         self.consumed.append(0)
         self.param_stack.append(parameters)
 
+    ##########################################################################
+    # Environment management
+
+    def push_environment(self, name):
+        self.environment_stack.append(EnvironmentRecord(name))
+
+    def pop_environment(self):
+        record = self.environment_stack.pop()
+        record.call_pop_hooks()
+
+    def add_environment_pop_hook(self, hook):
+        self.environment_stack[-1].add_pop_hook(hook)
+        
     ##########################################################################
     # LaTeX state
 

@@ -9,10 +9,12 @@ class MarkdownEmit(parse.Interpreter):
         super().__init__(*args, **kwargs)
         self.skip_linebreak = False
         self.linebreak_count = 0
+        self.needs_par_flush = 0
     
     def process(self, kind, *args):
         dispatch = {
             "command": self.process_command,
+            "callback": self.process_callback,
             "echo": self.process_echo,
             "begin_environment": self.process_begin_environment,
             "end_environment": self.process_end_environment,
@@ -33,14 +35,18 @@ class MarkdownEmit(parse.Interpreter):
 
     def process_begin_environment(self, name, *args):
         dispatch = {
-            "figure": self.process_begin_figure
+            "figure": self.process_begin_figure,
+            "table": self.process_begin_table,
+            "tabu": self.process_begin_tabu,
             }
         if name in dispatch:
             dispatch[name](*args)
 
     def process_end_environment(self, name, *args):
         dispatch = {
-            "figure": self.process_end_figure
+            "figure": self.process_end_figure,
+            "table": self.process_end_table,
+            "tabu": self.process_end_tabu,
             }
         if name in dispatch:
             dispatch[name](*args)
@@ -51,9 +57,24 @@ class MarkdownEmit(parse.Interpreter):
     def process_end_figure(self, *args):
         self.push_block([parse.echo(r'</div>')])
 
+    def process_begin_table(self, *args):
+        self.push_block([parse.echo(r'<div class="table">')])
+
+    def process_end_table(self, *args):
+        self.push_block([parse.echo(r'</div>')])
+        
+    def process_begin_tabu(self, *args):
+        self.push_block([parse.echo(r'<div class="tabu">')])
+
+    def process_end_tabu(self, *args):
+        self.push_block([parse.echo(r'</div>')])
+        
     def process_echo(self, value):
         self.linebreak_count = 0
         print(value, end='')
+
+    def process_callback(self, value):
+        value()
 
     def process_mathtoggle(self):
         print('$', end='')
@@ -90,19 +111,47 @@ class MarkdownEmit(parse.Interpreter):
             "textbf": self.process_command_textbf,
             "texttt": self.process_command_texttt,
             "usepackage": self.process_command_usepackage,
+            "Huge": self.process_command_font_size("Huge"),
+            "huge": self.process_command_font_size("huge"),
+            "LARGE": self.process_command_font_size("LARGE"),
+            "Large": self.process_command_font_size("Large"),
+            "large": self.process_command_font_size("large"),
+            "normalsize": self.process_command_font_size("normalsize"),
+            "small": self.process_command_font_size("small"),
+            "footnotesize": self.process_command_font_size("footnotesize"),
+            "scriptsize": self.process_command_font_size("scriptsize"),
+            "tiny": self.process_command_font_size("tiny"),
         }
         if command_name in dispatch:
             dispatch[command_name](params, optionals)
         else:
             print("MD process command", command_name, params, optionals, file=sys.stderr)
 
+
+    def flush_paragraph_style(self):
+        while self.needs_par_flush > 0:
+            self.needs_par_flush -= 1
+            print("</span>", end='')
+        
+    def process_command_font_size(self, fontsize):
+        def process_it(params, optionals):
+            self.needs_par_flush += 1
+            self.push_block([parse.echo("<span class='%s'>" % fontsize)])
+            self.add_environment_pop_hook(self.flush_paragraph_style)
+        return process_it
+            
     def process_command_href(self, params, optionals):
         self.push_block([parse.echo("<%s>" % params[0].as_string())])
 
     def process_command_marginpar(self, params, optionals):
-        self.push_block([parse.echo("<div class='marginpar'>")] +
-                        params[0].statements,
-                        [parse.echo("</div>")])
+        def start_environ():
+            self.push_environment("marginpar")
+        def end_environ():
+            self.pop_environment()
+        self.push_block([parse.echo("<div class='marginpar'>"),
+                         parse.callback(start_environ)] + params[0].statements +
+                        [parse.callback(end_environ),
+                         parse.echo("</div>")])
 
     def process_command_dots(self, params, optionals):
         self.push_block([parse.echo("...")])
@@ -127,8 +176,8 @@ class MarkdownEmit(parse.Interpreter):
                         [parse.echo('</span>')])
 
     def process_command_item(self, params, optionals):
-        curenv = self.environment_stack[-1]
-        itemize_lengths = len(list(x for x in self.environment_stack if x in
+        curenv = self.environment_stack[-1].name
+        itemize_lengths = len(list(x.name for x in self.environment_stack if x in
                                    ['itemize', 'enumerate']))
         indent = '  ' * (itemize_lengths - 1)
         if curenv == 'itemize':
@@ -202,6 +251,8 @@ class MarkdownEmit(parse.Interpreter):
             if self.linebreak_count < 2:
                 print("\n", end='')
             self.linebreak_count += 1
+            if self.linebreak_count == 2:
+                self.flush_paragraph_style()
 
     def process_parameter_use(self, *args):
         pass
