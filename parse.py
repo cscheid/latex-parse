@@ -30,6 +30,9 @@ class MathToggle(ModelClass):
     def as_string(self):
         return "$"
 
+    def collect_strings(self, lst):
+        lst.append("$")
+
     def interpret(self, interpreter):
         interpreter._process('mathtoggle')
 
@@ -41,6 +44,9 @@ class LineBreak(ModelClass):
 
     def as_string(self):
         return "\n"
+
+    def collect_strings(self, lst):
+        lst.append("\n")
 
     def interpret(self, interpreter):
         interpreter._process('linebreak')
@@ -55,6 +61,9 @@ class Whitespace(ModelClass):
     def as_string(self):
         return " "
    
+    def collect_strings(self, lst):
+        lst.append(" ")
+
     def interpret(self, interpreter):
         interpreter._process('whitespace')
 
@@ -139,6 +148,7 @@ class Punctuation(ModelClass):
     def collect_strings(self, lst):
         lst.append(self.punctuation)
 
+        
 class Command(ModelClass):
 
     def __init__(self, parent=None, command=None, optional_parameters=[]):
@@ -148,7 +158,11 @@ class Command(ModelClass):
 
     def interpret(self, interpreter):
         command_defn = interpreter.command_definitions[self.command[1:]]
+        optional_parameters = interpreter.read_optional_parameters()
+        self.optional_parameters = self.optional_parameters + optional_parameters
         parameters = interpreter.read_parameters(command_defn.params)
+        
+        print(self, self.optional_parameters)
         command_defn.invoke(interpreter, self.optional_parameters, parameters)
 
     def __repr__(self):
@@ -156,7 +170,8 @@ class Command(ModelClass):
 
     def collect_strings(self, lst):
         lst.append(self.command)
-    
+
+        
 # we use a NOP as a sentinel in the cursor code to simplify it
 
 class NOPModel(ModelClass):
@@ -221,12 +236,28 @@ class BeginCommand(InterpreterCommand):
         name = name_stmt.word
         environment = interpreter.environment_definitions[name]
         parameters = interpreter.read_parameters(environment.params)
+
+        # optional parameters for environments show up in reverse order and are inside
+        # a context-dependent bit, so we need to parse them here, sigh
+        tok = interpreter.peek()
+        if tok.as_string() == '[':
+            # this will fail in general, but we'll greedily assume these are optional parameters now
+            interpreter.read()
+            optional_params_list = []
+            tok = interpreter.peek()
+            while tok.as_string() != ']':
+                tok_to_add = interpreter.read()
+                optional_params_list.append(tok_to_add)
+                tok = interpreter.peek()
+            interpreter.read()
+            optional_params = Block(statements=optional_params_list)
+        
         if environment.params > 0:
             interpreter.param_stack.append(parameters)
             interpreter.push_block(environment.preamble, parameters)
         else:
             interpreter.push_block(environment.preamble, interpreter.param_stack[-1])
-        interpreter._process('begin_environment', name, parameters)
+        interpreter._process('begin_environment', name, optional_params, parameters)
 
             
 class EndCommand(InterpreterCommand):
@@ -370,6 +401,7 @@ class Interpreter:
         self.new_environment('table', 0, [], [])
         self.new_environment('tabular', 0, [], [])
         self.new_environment('tabu', 1, [], [])
+        self.new_environment('figure', 0, [], [])
                 
         self.new_command('documentclass', 1)
         self.new_command('textbf', 1, Block(statements=[ParameterUse(parameter_number=1)]))
@@ -380,10 +412,14 @@ class Interpreter:
         self.new_command('\\', 0)
         self.new_command('dots', 0)
         self.new_command('sum', 0)
-        self.new_command('marginpar', 1)
         self.new_command('small', 0)
         self.new_command('scriptsize', 0)
         self.new_command('centering', 0)
+        self.new_command('marginpar', 1)
+        self.new_command('footnote', 1)
+        self.new_command('acknowledgments', 1)
+        self.new_command('bibliographystyle', 1)
+        self.new_command('bibliography', 1)
         
         self.new_command('texttt', 1)
         self.new_command('LaTeX', 0)
@@ -423,7 +459,8 @@ class Interpreter:
         self.command_definitions['ifpdf'] = StartIgnoring()
         self.command_definitions['else'] = NOP()
         self.command_definitions['fi'] = StopIgnoring()
-        for cmd in ['pdfoutput', 'pdfcompresslevel', 'pdfoptionpdfminorversion',
+        for cmd in ['pdfoutput', 'pdfcompresslevel',
+                    'pdfoptionpdfminorversion',
                     'ExecuteOptions', 'DeclareGraphicsExtensions']:
             self.command_definitions[cmd] = NOP()
 
@@ -456,7 +493,6 @@ class Interpreter:
     
     def read_parameters(self, n_max=100000): # yeah that needs fixing
         """Consumes parameters from the statement stream."""
-        # we first need to advance the cursor
         if n_max == 0:
             return []
         self.advance()
@@ -470,6 +506,22 @@ class Interpreter:
             n_max -= 1
         return result
 
+    def read_optional_parameters(self):
+        """Consumes optional parameters from the statement stream."""
+        result = []
+        self.advance()
+        cmd = self.peek()
+        while cmd.as_string() == '[':
+            self.read()
+            block_list = []
+            cmd = self.peek()
+            while cmd.as_string() != ']':
+                block_list.append(self.read())
+                cmd = self.peek()
+            result.append(Block(statements=block_list))
+            self.read()
+        return result
+    
     # def begin_environment(self, name):
     #     environment = self.get_environment_definition(name)
     #     params = self.read_parameters(environment.params)
@@ -558,10 +610,11 @@ class GraphicsPath:
     def invoke(self, interpreter, optionals, parameters):
         graphics_state["graphics_path"] = list(
             stmt.as_string() for stmt in parameters[0].statements)
-
+        
 
 def install_graphics_support(interpreter):
     interpreter.command_definitions['graphicspath'] = GraphicsPath()
+    interpreter.new_command('includegraphics', 1)
 
 ##############################################################################
 # VGTC stuff
