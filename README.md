@@ -7,3 +7,8 @@ make nice-looking web pages out of them.
 * Why not pandoc? Pandoc failed pretty badly with my papers, and I
   want this to require as little changes in the papers as possible.
 
+## How to run what we have so far
+
+- Clone this
+- `$ pip install textx`
+- `$ ./drive.py test-files/0008.tex` (etc.)
